@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -55,6 +55,8 @@ flags.DEFINE_string(
 
 flags.DEFINE_bool("detokenize", False, "If True, then decode ids to strings.")
 
+flags.DEFINE_bool("shuffle", True, "Whether to shuffle dataset or not.")
+
 
 
 @gin.configurable
@@ -93,7 +95,7 @@ def main(_):
   ds = task.get_dataset(sequence_length=sequence_length(),
                         split=FLAGS.split,
                         use_cached=False,
-                        shuffle=False)
+                        shuffle=FLAGS.shuffle)
 
   keys = re.findall(r"{([\w+]+)}", FLAGS.format_string)
   def _example_to_string(ex):
@@ -118,9 +120,8 @@ def main(_):
     print(_example_to_string(ex))
     total_examples += 1
     if total_examples == FLAGS.max_examples:
-      return
-
-
+      break
+  return
 
 if __name__ == "__main__":
   app.run(main)

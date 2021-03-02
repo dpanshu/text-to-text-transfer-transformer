@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -240,7 +240,6 @@ class MtfModel(T5Model):
                            vocabulary,
                            checkpoint_step,
                            sequence_length,
-                           examples,
                            split,
                            eval_with_score=False,
                            **unused_kwargs):
@@ -253,7 +252,6 @@ class MtfModel(T5Model):
       checkpoint_step: integer, step to evaluate the tasks.
       sequence_length: a dict, dictionary with sequence length for inputs and
         targets.
-      examples: dict, cached examples for each task.
       split: string, split to run the evaluation on.
       eval_with_score: bool, whether to compute log likelihood of targets
         instead of predictions.
@@ -293,8 +291,7 @@ class MtfModel(T5Model):
           estimator_input_fn,
           checkpoint_step,
           self._model_dir,
-          vocabulary,
-          num_examples=sum(len(cex) for cex in examples.values()))
+          vocabulary)
     else:
       outputs = [
           tf.compat.as_text(d) for d in mtf_utils.decode(
@@ -417,13 +414,14 @@ class MtfModel(T5Model):
       gin.bind_parameter("Bitransformer.decode.beam_size", beam_size)
       gin.bind_parameter("Bitransformer.decode.temperature", temperature)
       gin.bind_parameter("Bitransformer.decode.sampling_keep_top_k", keep_top_k)
+      gin.bind_parameter("utils.decode_from_file.input_filename", input_file)
+      gin.bind_parameter("utils.decode_from_file.output_filename", output_file)
 
     if vocabulary is None:
       vocabulary = utils.get_vocabulary()
     mtf_utils.infer_model(
         self.estimator(vocabulary), vocabulary, self._sequence_length,
-        self.batch_size, self._model_type, self._model_dir, checkpoint_steps,
-        input_file, output_file)
+        self.batch_size, self._model_type, self._model_dir, checkpoint_steps)
 
   def score(self,
             inputs=None,

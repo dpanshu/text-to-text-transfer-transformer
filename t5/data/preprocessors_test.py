@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +18,9 @@ import functools
 
 from absl.testing import absltest
 import gin
+from t5 import seqio
 from t5.data import preprocessors as prep
-from t5.data import test_utils
-from t5.data import utils
-from t5.data.dataset_providers import Feature
+from t5.seqio import test_utils
 import tensorflow.compat.v2 as tf
 
 tf.compat.v1.enable_eager_execution()
@@ -134,6 +133,7 @@ class PreprocessorsTest(tf.test.TestCase):
     output = self.evaluate(prep.permute_noise_tokens(
         tokens, noise_mask, vocabulary, [(0, 1)]))
     self.assertAllEqual(output, expected_output)
+    tf.random.set_seed(None)
 
   def test_noise_token_to_gathered_token(self):
     vocabulary = test_utils.MockVocabulary({'foo': [10]}, vocab_size=1000)
@@ -667,6 +667,36 @@ class PreprocessorsTest(tf.test.TestCase):
     _verify_split(100, 1)
     _verify_split(1000, 1)
 
+  def test_split_tokens_to_targets_length(self):
+    original = list(range(2, 102))
+    og_dataset = tf.data.Dataset.from_tensors({'targets': original})
+    sequence_length = {'targets': 4}
+    eos_features = {
+        'targets': seqio.Feature(
+            vocabulary=test_utils.PassThroughVocab(),
+            add_eos=True)
+    }
+    no_eos_features = {
+        'targets': seqio.Feature(
+            vocabulary=test_utils.PassThroughVocab(),
+            add_eos=False)
+    }
+
+    ds = prep.split_tokens_to_targets_length(
+        og_dataset,
+        sequence_length=sequence_length,
+        output_features=eos_features)
+    eos_outputs = list(ds.as_numpy_iterator())
+    # Outputs should be length 3 to leave room for adding EOS.
+    self.assertLen(eos_outputs[0]['targets'], 3)
+
+    ds = prep.split_tokens_to_targets_length(
+        og_dataset,
+        sequence_length=sequence_length,
+        output_features=no_eos_features)
+    no_eos_outputs = list(ds.as_numpy_iterator())
+    self.assertLen(no_eos_outputs[0]['targets'], 4)
+
   def test_trim_tokens_at_front(self):
     sequence_length = {'inputs': 4}
     inputs = tf.data.Dataset.from_tensors(
@@ -1118,31 +1148,6 @@ class PreprocessorsTest(tf.test.TestCase):
     dataset = prep.parse_tsv(og_dataset, field_names=['f1', 'f2'])
     assert_dataset(dataset, [{'f1': 'a', 'f2': 'b'}, {'f1': 'c', 'f2': 'd'}])
 
-  def test_tokenize(self):
-    og_dataset = tf.data.Dataset.from_tensors({
-        'prefix': 'This is',
-        'suffix': 'a test.'
-    })
-    output_features = {
-        'prefix': Feature(test_utils.MockVocabulary({'This is': [0, 1]})),
-        'suffix': Feature(test_utils.MockVocabulary({'a test.': [2, 3]})),
-    }
-
-    assert_dataset(
-        prep.tokenize(og_dataset, output_features=output_features), {
-            'prefix': [0, 1],
-            'prefix_plaintext': 'This is',
-            'suffix': [2, 3],
-            'suffix_plaintext': 'a test.'
-        })
-    assert_dataset(
-        prep.tokenize(
-            og_dataset, output_features=output_features, copy_plaintext=False),
-        {
-            'prefix': [0, 1],
-            'suffix': [2, 3]
-        })
-
   def test_denoise(self):
     vocab = test_utils.sentencepiece_vocab()
     target_tokens = vocab.encode('The quick brown fox.')
@@ -1157,13 +1162,13 @@ class PreprocessorsTest(tf.test.TestCase):
     })
 
     output_features = {
-        'targets': Feature(vocab),
+        'targets': seqio.Feature(vocab),
     }
 
     # These are the parameters of denoise in the operative config of 'base'.
     # Except noise_density, bumped up from 0.15 to 0.3 in order to demonstrate
     # multiple corrupted spans.
-    with utils.map_seed_manager(42):
+    with seqio.map_seed_manager(42):
       denoised_dataset = prep.denoise(
           og_dataset,
           output_features,
@@ -1195,7 +1200,9 @@ class PreprocessorsTest(tf.test.TestCase):
     """
     gin.parse_config(bindings)
     og_dataset = tf.data.Dataset.from_tensor_slices({'targets': [1, 2, 3]})
-    output_features = {'targets': Feature(test_utils.sentencepiece_vocab())}
+    output_features = {
+        'targets': seqio.Feature(test_utils.sentencepiece_vocab())
+    }
     # Test denoise function when it is used as a gin-configurable of another
     # gin-configurable, prep.unsupervised.
     dataset = prep.unsupervised(og_dataset, output_features=output_features)
@@ -1203,10 +1210,15 @@ class PreprocessorsTest(tf.test.TestCase):
 
   def test_prefix_lm(self):
     vocab = test_utils.sentencepiece_vocab()
-    inp = list(range(1, 101))
+    # Create list of length 99 because prefix_lm will split to 1 less than the
+    # max length of 100 to leave room for EOS token.
+    inp = list(range(1, 100))
     og_dataset = tf.data.Dataset.from_tensor_slices({'targets': [inp]})
     og_dataset = og_dataset.repeat(100)
-    output_features = {'targets': Feature(vocab)}
+    output_features = {
+        'targets': seqio.Feature(vocab),
+        'inputs': seqio.Feature(vocab),
+    }
     output_dataset = prep.prefix_lm(
         og_dataset,
         {'inputs': 100, 'targets': 100},
@@ -1237,7 +1249,7 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='train'),
         [
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs': 'the sky is blue',
                 'targets': 'class 1',
                 'is_correct': True,
@@ -1248,13 +1260,13 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='eval'),
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'inputs': 'cats are so cute',
                 'targets': 'class 0',
                 'is_correct': False,
             },
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs': 'the sky is blue',
                 'targets': 'class 1',
                 'is_correct': True,
@@ -1265,7 +1277,7 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='fewshot_eval'),
         [
             {
-                'idx': [0, 0],
+                'idx': [[0, 0], [0, 1]],
                 'inputs': ['cats are so cute', 'the sky is blue'],
                 'targets': ['class 0', 'class 1'],
                 'is_correct': [False, True]
@@ -1289,13 +1301,13 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='train'),
         [
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs': 'the sky is blue',
                 'targets': 'class 1',
                 'is_correct': True,
             },
             {
-                'idx': 0,
+                'idx': [0, 2],
                 'inputs': 'X',
                 'targets': 'class 2',
                 'is_correct': True,
@@ -1306,19 +1318,19 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='eval'),
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'inputs': 'cats are so cute',
                 'targets': 'class 0',
                 'is_correct': False,
             },
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs': 'the sky is blue',
                 'targets': 'class 1',
                 'is_correct': True,
             },
             {
-                'idx': 0,
+                'idx': [0, 2],
                 'inputs': 'X',
                 'targets': 'class 2',
                 'is_correct': True,
@@ -1329,7 +1341,7 @@ class PreprocessorsTest(tf.test.TestCase):
         preprocessor(mode='fewshot_eval'),
         [
             {
-                'idx': [0, 0, 0],
+                'idx': [[0, 0], [0, 1], [0, 2]],
                 'inputs': ['cats are so cute', 'the sky is blue', 'X'],
                 'targets': ['class 0', 'class 1', 'class 2'],
                 'is_correct': [False, True, True]
@@ -1353,7 +1365,7 @@ class PreprocessorsTest(tf.test.TestCase):
 
     test_utils.assert_dataset(
         preprocessor(mode='train'), [{
-            'idx': 0,
+            'idx': [0, 1],
             'inputs': 'the sky is blue',
             'targets': 'class 1',
             'is_correct': True,
@@ -1362,13 +1374,13 @@ class PreprocessorsTest(tf.test.TestCase):
 
     test_utils.assert_dataset(
         preprocessor(mode='eval'), [{
-            'idx': 0,
+            'idx': [0, 0],
             'inputs': 'cats are so cute',
             'targets': 'class 0',
             'is_correct': False,
             'weight': 1.0,
         }, {
-            'idx': 0,
+            'idx': [0, 1],
             'inputs': 'the sky is blue',
             'targets': 'class 1',
             'is_correct': True,
@@ -1378,7 +1390,7 @@ class PreprocessorsTest(tf.test.TestCase):
     test_utils.assert_dataset(
         preprocessor(mode='fewshot_eval'), [
             {
-                'idx': [0, 0],
+                'idx': [[0, 0], [0, 1]],
                 'inputs': ['cats are so cute', 'the sky is blue'],
                 'targets': ['class 0', 'class 1'],
                 'is_correct': [False, True],
@@ -1459,28 +1471,28 @@ class PreprocessorsTest(tf.test.TestCase):
         dataset,
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'inputs':
                     'The farmland needed irrigation. What is the effect? X',
                 'targets': 'I think a canal was constructed.',
                 'is_correct': True
             },
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs':
                     'The farmland needed irrigation. What is the effect? X',
                 'targets': 'I think the crops grew tall.',
                 'is_correct': False
             },
             {
-                'idx': 1,
+                'idx': [1, 0],
                 'inputs':
                     'I decided to stay home last night. What is the cause? X',
                 'targets': 'I think I wanted to see people.',
                 'is_correct': False
             },
             {
-                'idx': 1,
+                'idx': [1, 1],
                 'inputs':
                     'I decided to stay home last night. What is the cause? X',
                 'targets': 'I think I was too tired.',
@@ -1500,28 +1512,28 @@ class PreprocessorsTest(tf.test.TestCase):
         dataset,
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'targets':
                     'The farmland needed irrigation. What is the effect? X',
                 'inputs': 'I think a canal was constructed.',
                 'is_correct': True
             },
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'targets':
                     'The farmland needed irrigation. What is the effect? X',
                 'inputs': 'I think the crops grew tall.',
                 'is_correct': False
             },
             {
-                'idx': 1,
+                'idx': [1, 0],
                 'targets':
                     'I decided to stay home last night. What is the cause? X',
                 'inputs': 'I think I wanted to see people.',
                 'is_correct': False
             },
             {
-                'idx': 1,
+                'idx': [1, 1],
                 'targets':
                     'I decided to stay home last night. What is the cause? X',
                 'inputs': 'I think I was too tired.',
@@ -1540,14 +1552,14 @@ class PreprocessorsTest(tf.test.TestCase):
         dataset,
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'inputs':
                     'The farmland needed irrigation. What is the effect? X',
                 'targets': 'I think a canal was constructed.',
                 'is_correct': True
             },
             {
-                'idx': 1,
+                'idx': [1, 1],
                 'inputs':
                     'I decided to stay home last night. What is the cause? X',
                 'targets': 'I think I was too tired.',
@@ -1566,7 +1578,7 @@ class PreprocessorsTest(tf.test.TestCase):
         dataset,
         [
             {
-                'idx': [0, 0],
+                'idx': [[0, 0], [0, 1]],
                 'inputs': [
                     'The farmland needed irrigation. What is the effect? X',
                     'The farmland needed irrigation. What is the effect? X',
@@ -1578,7 +1590,7 @@ class PreprocessorsTest(tf.test.TestCase):
                 'is_correct': [True, False]
             },
             {
-                'idx': [1, 1],
+                'idx': [[1, 0], [1, 1]],
                 'inputs': [
                     'I decided to stay home last night. What is the cause? X',
                     'I decided to stay home last night. What is the cause? X',
@@ -1620,7 +1632,7 @@ class PreprocessorsTest(tf.test.TestCase):
         dataset,
         [
             {
-                'idx': 0,
+                'idx': [0, 0],
                 'inputs':
                     'creating paper requires cutting down trees. What is the '
                     'ultimate source of greeting cards? X 0',
@@ -1629,7 +1641,7 @@ class PreprocessorsTest(tf.test.TestCase):
                 'is_correct': True,
             },
             {
-                'idx': 0,
+                'idx': [0, 1],
                 'inputs':
                     'creating paper requires cutting down trees. What is the '
                     'ultimate source of greeting cards? X 0',
@@ -1707,28 +1719,28 @@ class PreprocessorsTest(tf.test.TestCase):
 
     test_utils.assert_dataset(dataset, [
         {
-            'idx': 0,
+            'idx': [0, 0],
             'inputs': 'The farmland needed irrigation. What is the effect? X',
             'targets': 'I think a canal was constructed.',
             'is_correct': True,
             'weight': 1.0,
         },
         {
-            'idx': 0,
+            'idx': [0, 1],
             'inputs': 'The farmland needed irrigation. What is the effect? X',
             'targets': 'I think the crops grew tall.',
             'is_correct': False,
             'weight': 1.0,
         },
         {
-            'idx': 1,
+            'idx': [1, 0],
             'inputs': 'I decided to stay home last night. What is the cause? X',
             'targets': 'I think I wanted to see people.',
             'is_correct': False,
             'weight': 0.5,
         },
         {
-            'idx': 1,
+            'idx': [1, 1],
             'inputs': 'I decided to stay home last night. What is the cause? X',
             'targets': 'I think I was too tired.',
             'is_correct': True,
@@ -1746,14 +1758,14 @@ class PreprocessorsTest(tf.test.TestCase):
 
     test_utils.assert_dataset(dataset, [
         {
-            'idx': 0,
+            'idx': [0, 0],
             'inputs': 'The farmland needed irrigation. What is the effect? X',
             'targets': 'I think a canal was constructed.',
             'is_correct': True,
             'weight': 1.0,
         },
         {
-            'idx': 1,
+            'idx': [1, 1],
             'inputs': 'I decided to stay home last night. What is the cause? X',
             'targets': 'I think I was too tired.',
             'is_correct': True,
@@ -1771,7 +1783,7 @@ class PreprocessorsTest(tf.test.TestCase):
 
     test_utils.assert_dataset(dataset, [
         {
-            'idx': [0, 0],
+            'idx': [[0, 0], [0, 1]],
             'inputs': [
                 'The farmland needed irrigation. What is the effect? X',
                 'The farmland needed irrigation. What is the effect? X',
@@ -1784,7 +1796,7 @@ class PreprocessorsTest(tf.test.TestCase):
             'weight': 1.0,
         },
         {
-            'idx': [1, 1],
+            'idx': [[1, 0], [1, 1]],
             'inputs': [
                 'I decided to stay home last night. What is the cause? X',
                 'I decided to stay home last night. What is the cause? X',
@@ -1804,7 +1816,7 @@ class PreprocessorsTest(tf.test.TestCase):
         'inputs': [4, 5, 6, 7]
     })
     dataset = prep.select_random_chunk(
-        dataset, feature_key='targets', max_length=4)
+        dataset, output_features=None, feature_key='targets', max_length=4)
     output = list(dataset.as_numpy_iterator())
     self.assertEqual(1, len(output))
     output = output[0]
@@ -1818,7 +1830,7 @@ class PreprocessorsTest(tf.test.TestCase):
         'notes': 'hi',
     })
     dataset = prep.select_random_chunk(
-        dataset, feature_key='targets', max_length=4,
+        dataset, output_features=None, feature_key='targets', max_length=4,
         additional_passthrough_keys=['notes'])
     output = list(dataset.as_numpy_iterator())
     output = output[0]
@@ -1831,7 +1843,8 @@ class PreprocessorsTest(tf.test.TestCase):
         'inputs': [4, 5, 6, 7]
     })
     dataset = prep.select_random_chunk(
-        dataset, feature_key='targets', max_length=4, uniform_random_start=True)
+        dataset, output_features=None, feature_key='targets', max_length=4,
+        uniform_random_start=True)
     output = list(dataset.as_numpy_iterator())
     self.assertEqual(1, len(output))
     output = output[0]
@@ -1844,8 +1857,8 @@ class PreprocessorsTest(tf.test.TestCase):
         'inputs': [4, 5, 6, 7]
     })
     dataset = prep.select_random_chunk(
-        dataset, feature_key='targets', additional_feature_keys=['inputs'],
-        max_length=3)
+        dataset, output_features=None, feature_key='targets',
+        additional_feature_keys=['inputs'], max_length=3)
     output = list(dataset.as_numpy_iterator())
     self.assertEqual(1, len(output))
     output = output[0]
@@ -1859,8 +1872,8 @@ class PreprocessorsTest(tf.test.TestCase):
     })
     with self.assertRaises(tf.errors.InvalidArgumentError):
       prep.select_random_chunk(
-          dataset, feature_key='targets', additional_feature_keys=['inputs'],
-          max_length=4)
+          dataset, output_features=None, feature_key='targets',
+          additional_feature_keys=['inputs'], max_length=4)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,27 +23,25 @@ import pandas as pd
 from t5.evaluation import eval_utils
 import tensorflow.compat.v1 as tf
 
-tf.disable_v2_behavior()
-
 
 class EvalUtilsTest(absltest.TestCase):
 
   def test_parse_events_files(self):
     tb_summary_dir = self.create_tempdir()
-    tf.disable_eager_execution()  # Needed in pytest.
-    summary_writer = tf.summary.FileWriter(tb_summary_dir.full_path)
-    tags = [
-        "eval/foo_task/accuracy",
-        "eval/foo_task/accuracy",
-        "loss",
-    ]
-    values = [1., 2., 3.]
-    steps = [20, 30, 40]
-    for tag, value, step in zip(tags, values, steps):
-      summary = tf.Summary()
-      summary.value.add(tag=tag, simple_value=value)
-      summary_writer.add_summary(summary, step)
-    summary_writer.flush()
+    with tf.Graph().as_default():
+      summary_writer = tf.summary.FileWriter(tb_summary_dir.full_path)
+      tags = [
+          "eval/foo_task/accuracy",
+          "eval/foo_task/accuracy",
+          "loss",
+      ]
+      values = [1., 2., 3.]
+      steps = [20, 30, 40]
+      for tag, value, step in zip(tags, values, steps):
+        summary = tf.Summary()
+        summary.value.add(tag=tag, simple_value=value)
+        summary_writer.add_summary(summary, step)
+      summary_writer.flush()
     events = eval_utils.parse_events_files(tb_summary_dir.full_path)
     self.assertDictEqual(
         events,

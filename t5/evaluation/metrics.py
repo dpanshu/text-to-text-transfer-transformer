@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -352,8 +352,8 @@ def sklearn_metrics_wrapper(metric_str,
 
 
 def rank_classification(
-    targets: Sequence[Tuple[int, bool, float]],
-    predictions: Sequence[float],
+    targets: Sequence[Tuple[Sequence[int], bool, float]],
+    scores: Sequence[float],
     num_classes: Optional[int] = None) -> Dict[str, Union[float, int]]:
   """Computes standard metrics classification based on log likelihood ranking.
 
@@ -365,10 +365,14 @@ def rank_classification(
   In the case of multiple labels, a prediction matching any will be considered
   correct.
 
+  For problems with two labels, AUC-pr and AUC-roc retrieval metrics will be
+  reported for the positive class, which is assumed to have an 'idx' of 1. If
+  more labels are present, only accuracy and F-1 will be reported.
+
   Args:
     targets: list of tuples, the 'idx', 'is_correct' and 'weight' fields from
       ground truth examples.
-    predictions: list of float, a flat list of log likelihood scores for each
+    scores: list of float, a flat list of log likelihood scores for each
       possible label for each example.
     num_classes: int or None, the number of possible classes for the label or
       None if the number of classes vary.
@@ -379,33 +383,45 @@ def rank_classification(
   Raises:
     ValueError: if `targets` is not a sequence of 3-tuples.
   """
-  assert len(targets) == len(predictions)
+  assert len(targets) == len(scores)
   if len(targets[0]) != 3:
     raise ValueError(
-        "`targets` should contain three elements. Only %d are provided." %
-        len(targets[0]))
+        f"`targets` should contain 3 elements but has {len(targets[0])}.")
+
+  idx_0 = targets[0][0]
+  if not hasattr(idx_0, "__len__") or len(idx_0) != 2:
+    raise ValueError(
+        "The first element of `targets` ('idx') should be 2-dimensional. "
+        f"Got {idx_0}.")
+
+  # Sort by 'idx' since the function relies on this assumption.
+  # ((idx, is_correct, weight), score)
+  get_idx = lambda x: x[0][0]
+  targets, scores = zip(*sorted(zip(targets, scores), key=get_idx))
 
   if not num_classes:
     # Assuming variable classes. Can only compute accuracy.
     num_correct = 0
     total = 0
-    for _, grp in itertools.groupby(
-        zip(targets, predictions), lambda x: x[0][0]):
+
+    # (((input idx, output idx), is_correct, weight), score)
+    get_grp = lambda x: x[0][0][0]
+
+    for _, grp in itertools.groupby(zip(targets, scores), get_grp):
       exs, log_likelihoods = zip(*grp)
       prediction = np.argmax(log_likelihoods)
       weights = exs[prediction][2]
       num_correct += exs[prediction][1] * weights
       total += weights
-    return {
-        "accuracy": 100 * num_correct / total
-    }
+    return {"accuracy": 100 * num_correct / total}
 
-  assert len(targets) % num_classes == 0
+  assert len(targets) % num_classes == 0, f"{len(targets)} % {num_classes} != 0"
+
   labels_indicator = np.array([is_correct for _, is_correct, _ in targets
                               ]).reshape((-1, num_classes))
   weights = np.array([weight for _, _, weight in targets]).reshape(
       (-1, num_classes))[:, 0]
-  log_likelihoods = np.array(predictions, np.float32).reshape((-1, num_classes))
+  log_likelihoods = np.array(scores, np.float32).reshape((-1, num_classes))
   predictions = log_likelihoods.argmax(-1)
 
   if np.any(labels_indicator.sum(axis=-1) > 1):
@@ -428,28 +444,38 @@ def rank_classification(
     return y / y.sum(-1)[:, np.newaxis]
   probs = exp_normalize(log_likelihoods)
 
-  if num_classes > 2:
-    metrics = mean_multiclass_f1(
-        num_classes, sample_weight=weights)(labels_indicator,
-                                            predictions_indicator)
-  else:
-    metrics = {
-        "f1":
-            100 * sklearn.metrics.f1_score(
-                labels_indicator.argmax(-1), predictions, sample_weight=weights)
-    }
-  metrics.update({
-      "auc-roc":
-          100 * sklearn.metrics.roc_auc_score(
-              labels_indicator, probs, multi_class="ovr",
-              sample_weight=weights),
-      "auc-pr":
-          100 * sklearn.metrics.average_precision_score(
-              labels_indicator, probs, sample_weight=weights),
+  metrics = {
       "accuracy":
           100 * sklearn.metrics.accuracy_score(
               labels_indicator, predictions_indicator, sample_weight=weights),
-  })
+  }
+
+  if num_classes > 2:
+    metrics.update(
+        mean_multiclass_f1(num_classes,
+                           sample_weight=weights)(labels_indicator,
+                                                  predictions_indicator))
+    logging.warning("AUC-pr and AUC-roc are not supported when num_classes > 2")
+  else:
+    metrics.update({
+        "f1":
+            100 * sklearn.metrics.f1_score(
+                labels_indicator.argmax(-1), predictions, sample_weight=weights)
+    })
+    labels_indicator = labels_indicator[:, 1]
+    probs = probs[:, 1]
+
+    metrics.update({
+        "auc-roc":
+            100 * sklearn.metrics.roc_auc_score(
+                labels_indicator, probs, multi_class="ovr",
+                sample_weight=weights, average="macro"),
+        "auc-pr":
+            100 * sklearn.metrics.average_precision_score(
+                labels_indicator, probs, sample_weight=weights,
+                average="macro"),
+    })
+
   return metrics
 
 

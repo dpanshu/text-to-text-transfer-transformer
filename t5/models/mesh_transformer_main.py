@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ flags.DEFINE_string(
     "will attempt to automatically detect the GCE project from metadata.")
 
 flags.DEFINE_multi_string(
-    "module_import", None,
+    "module_import", "t5.data.mixtures",
     "Modules to import. Use this, for example, to add new `Task`s to the "
     "global `TaskRegistry`.")
 
@@ -144,7 +144,6 @@ def main(_):
 
   if FLAGS.t5_tfds_data_dir:
     t5.data.set_tfds_data_dir_override(FLAGS.t5_tfds_data_dir)
-  t5.data.add_global_cache_dirs(FLAGS.additional_task_cache_dirs)
 
   # Add search path for gin files stored in package.
   gin.add_config_file_search_path(
@@ -159,7 +158,7 @@ def main(_):
       command_filename = os.path.join(command_dir, "command.{}".format(suffix))
     with tf.io.gfile.GFile(command_filename, "w") as f:
       f.write(" ".join(sys.argv))
-  except tf.errors.PermissionDeniedError:
+  except (tf.errors.PermissionDeniedError, tf.errors.InvalidArgumentError):
     logging.info(
         "No write access to model directory. Skipping command logging.")
 
@@ -170,6 +169,9 @@ def main(_):
   # function or class in many existing configs.
   gin.bind_parameter("run.vocabulary", mesh_transformer.get_vocabulary())
   gin.finalize()
+
+  # Set cache dir after loading gin to avoid unintentionally overriding it.
+  t5.data.add_global_cache_dirs(FLAGS.additional_task_cache_dirs)
 
   if FLAGS.use_model_api:
     model = mtf_model.MtfModel(

@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -70,7 +70,7 @@ setuptools.setup(
     entry_points={
         'console_scripts': [
             't5_mesh_transformer = t5.models.mesh_transformer_main:console_entry_point',
-            't5_cache_tasks = t5.data.cache_tasks_main:console_entry_point'
+            't5_cache_tasks = t5.seqio.scripts.cache_tasks_main:console_entry_point'
         ],
     },
     classifiers=[

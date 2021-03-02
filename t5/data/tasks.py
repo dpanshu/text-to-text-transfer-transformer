@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,28 +13,32 @@
 # limitations under the License.
 
 """Add Tasks to registry."""
+# TODO(adarob): Switch to seqio.Task.
+
 import functools
 
+from t5 import seqio
+import t5.data
 from t5.data import postprocessors
 from t5.data import preprocessors
-from t5.data.dataset_providers import Feature
-from t5.data.dataset_providers import TaskRegistry
-from t5.data.dataset_providers import TfdsTask
 from t5.data.glue_utils import get_glue_metric
 from t5.data.glue_utils import get_glue_postprocess_fn
 from t5.data.glue_utils import get_glue_text_preprocessor
 from t5.data.glue_utils import get_super_glue_metric
-from t5.data.utils import get_default_vocabulary
-from t5.data.utils import set_global_cache_dirs
 from t5.evaluation import metrics
 import tensorflow_datasets as tfds
+
+TaskRegistry = t5.data.TaskRegistry
+TfdsTask = t5.data.TfdsTask
 
 
 
 DEFAULT_OUTPUT_FEATURES = {
-    "inputs": Feature(
-        vocabulary=get_default_vocabulary(), add_eos=True, required=False),
-    "targets": Feature(vocabulary=get_default_vocabulary(), add_eos=True)
+    "inputs": seqio.Feature(
+        vocabulary=t5.data.get_default_vocabulary(), add_eos=True,
+        required=False),
+    "targets": seqio.Feature(
+        vocabulary=t5.data.get_default_vocabulary(), add_eos=True)
 }
 
 # ==================================== C4 ======================================
@@ -118,7 +122,7 @@ for b in tfds.text.glue.Glue.builder_configs.values():
 TaskRegistry.add(
     "cnn_dailymail_v002",
     TfdsTask,
-    tfds_name="cnn_dailymail:1.0.0",
+    tfds_name="cnn_dailymail:3.1.0",
     text_preprocessor=functools.partial(preprocessors.summarize,
                                         article_key="article",
                                         summary_key="highlights"),

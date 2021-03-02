@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Preprocess tensorflow.data.Dataset()."""
+"""Preprocessors for T5 Tasks."""
+# TODO(adarob): Move some of the more general preprocessors to seqio.
 
 import collections
 import functools
@@ -24,18 +25,20 @@ import uuid
 from absl import logging
 import babel
 import gin
-from t5.data import utils
+from t5 import seqio
 import tensorflow.compat.v2 as tf
 
-# We disable no-value-for-parameter since the utils.map_over_dataset leads to
+# We disable no-value-for-parameter since the seqio.map_over_dataset leads to
 # a false positive when seeds are provided.
 # pylint:disable=no-value-for-parameter
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 FeatureType = Mapping[str, tf.Tensor]
 
+tokenize = seqio.preprocessors.tokenize
 
-@utils.map_over_dataset
+
+@seqio.map_over_dataset
 def rekey(x, key_map=None):
   """Replace the feature keys according to the mapping in `key_map`.
 
@@ -60,7 +63,7 @@ def rekey(x, key_map=None):
   return x
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def translate(x, source_language, target_language):
   """Convert a translation dataset to a text2text pair.
 
@@ -98,7 +101,7 @@ def translate(x, source_language, target_language):
   }
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def summarize(x, article_key, summary_key):
   """Convert a summarization dataset to a text2text pair.
 
@@ -147,7 +150,7 @@ NON_SPACED_LANGUAGE_RANGES = (
 )
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def pad_nonspaced_languages(x, text_key='text'):
   """Pad non-spaced languages with spaces around each character.
 
@@ -281,7 +284,7 @@ def trivia_qa(dataset):
   return dataset.unbatch()
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def squad(x, include_context=True):
   """Convert SQuAD examples to a text2text pair.
 
@@ -449,7 +452,7 @@ def random_split_text(dataset,
         dtype=tf.int32)
     return x[chunk_size * chunk_num:chunk_size * (chunk_num + 1)]
 
-  @utils.map_over_dataset(num_seeds=2)
+  @seqio.map_over_dataset(num_seeds=2)
   def my_fn(x, seeds):
     """Split one string into multiple strings.
 
@@ -547,7 +550,7 @@ def fill_in_the_blank(dataset,
   Returns:
     a tf.data.Dataset
   """
-  @utils.map_over_dataset(num_seeds=3)
+  @seqio.map_over_dataset(num_seeds=3)
   def my_fn(x, seeds):
     """Generates two preprocessed examples that are roughly inverses.
 
@@ -640,7 +643,7 @@ def fill_in_the_blank_sized(
   """
   bins = sorted(size_bins)
 
-  @utils.map_over_dataset(num_seeds=2)
+  @seqio.map_over_dataset(num_seeds=2)
   def my_fn(x, seeds):
     """Apply transformation."""
     words = x['words']
@@ -751,7 +754,7 @@ def neighboring_pairs(dataset, text_key='text', reuse_sentences=True):
   return dataset
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def glue(x, benchmark_name, label_names, feature_names=None, id_key='idx'):
   """Convert a dataset from glue to text2text examples.
 
@@ -833,7 +836,7 @@ def glue(x, benchmark_name, label_names, feature_names=None, id_key='idx'):
   return ex
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def stsb(x):
   """Convert STSB examples to text2text format.
 
@@ -876,7 +879,7 @@ def stsb(x):
   return {'inputs': joined, 'targets': label_string, 'idx': x['idx']}
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def wsc(x):
   """Convert WSC examples to text2text format.
 
@@ -1073,7 +1076,7 @@ def multi_translate(dataset, source_language, target_language):
   return translate(dataset, source_language, target_language)
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def definite_pronoun_resolution_simple(x, label='wsc:'):
   """Converts DPR examples to a simple text to text format.
 
@@ -1170,7 +1173,7 @@ def next_sentence_prediction(dataset,
     empty = [tf.equal(tf.size(t), 0) for t in tensors]
     return tf.reduce_any(empty)
 
-  @utils.map_over_dataset(num_seeds=1)
+  @seqio.map_over_dataset(num_seeds=1)
   def my_fn(x, seed):
     """Function to be applied to each example in dataset."""
     use_neighbors = (
@@ -1223,7 +1226,7 @@ def next_sentence_prediction(dataset,
   return dataset.filter(lambda x: example_len(x) > 0)
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def lm(x):
   """Basic language modeling objective for text - empty inputs.
 
@@ -1285,14 +1288,21 @@ def _wsc_inputs(x):
       x['text'],
       'The boy continued to whip the pony , and eventually the pony threw him over. John laughed out quite loud. \"Good for him,\" he said. '
       ):
-    return 'The boy continued to whip the pony , and eventually the pony threw him over. John laughed out quite loud. "Good for X ," he said.'
+    return (
+        'The boy continued to whip the pony , and eventually the pony threw '
+        'him over. John laughed out quite loud. "Good for X ," he said.'
+    )
 
   # Using the span2_index, we get 'use' instead of 'it'.
   if tf.equal(
       x['text'],
       'When they had eventually calmed down a bit , and had gotten home, Mr. Farley put the magic pebble in an iron safe . Some day they might want to use it , but really for now, what more could they wish for?'
       ):
-      return 'When they had eventually calmed down a bit , and had gotten home, Mr. Farley put the magic pebble in an iron safe . Some day they might want to use X , but really for now, what more could they wish for?'
+    return (
+        'When they had eventually calmed down a bit , and had gotten home, '
+        'Mr. Farley put the magic pebble in an iron safe . Some day they might '
+        'want to use X , but really for now, what more could they wish for?'
+    )
 
   return create_input()
 
@@ -1352,7 +1362,7 @@ def wsc_simple(dataset,
   return dataset.map(map_fn, num_parallel_calls=AUTOTUNE)
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def wnli_simple(x, label='wsc:'):
   """Converts GLUE WNLI examples to a simple text to text format.
 
@@ -1538,9 +1548,12 @@ def rank_classification(ds: tf.data.Dataset,
   In 'eval' mode, all inputs / targets will be produced.
   In 'fewshot_eval', all inputs / targets will be produced as a single batch.
 
-  Each input example will also be given a unique, sequential index called 'idx'.
+  Each output example will also be given a unique 'idx' feature. The first dim
+  is a sequential index for the input example and the second is the index of the
+  generated output for it. E.g., the second output example from the fourth input
+  example would be `[3, 1]`.
 
-  For example, consider the following arguments:
+  To be clear, consider the following arguments:
 
   inputs_fn=lambda ex: ex['prefix'],
   targets_fn=lambda ex: ex['suffix'],
@@ -1558,14 +1571,14 @@ def rank_classification(ds: tf.data.Dataset,
   the preprocessor would return:
 
   [{
-      'idx': 0,
+      'idx': [0, 0],
       'inputs': 'The farmland needed ',
       'targets': 'water',
       'is_correct': True,
       'weight': 1.0
    },
    {
-     'idx': 0,
+     'idx': [0, 1],
      'inputs': 'The farmland wanted ',
      'targets': 'cows',
      'is_correct': False,
@@ -1609,8 +1622,12 @@ def rank_classification(ds: tf.data.Dataset,
         '`inputs_fn`, `targets_fn`, and `is_correct_fn` must return the same '
         'size tensors.')
 
+    num_out = tf.size(is_correct)
+    in_idx = tf.fill([num_out], tf.cast(idx, tf.int32))
+    out_idx = tf.range(num_out)
+
     output = {
-        'idx': tf.fill(tf.shape(is_correct), idx),
+        'idx': tf.stack([in_idx, out_idx], 1),
         'inputs': inputs,
         'targets': targets,
         'is_correct': is_correct,
@@ -1778,7 +1795,7 @@ def rank_classification_formatter(
       mode=mode)
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def parse_tsv(line, field_names=None, field_delim='\t'):
   """Splits TSV lines into dict examples mapping field name to string value.
 
@@ -1801,7 +1818,7 @@ def parse_tsv(line, field_names=None, field_delim='\t'):
               use_quote_delim=False)))
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def preprocess_tsv(line,
                    field_delim='\t',
                    num_fields=2,
@@ -1867,62 +1884,31 @@ def preprocess_tsv(line,
 # ======================Token Preprocessors=====================================
 
 
-def tokenize(dataset, output_features, copy_plaintext=True):
-  """Encode specified string features.
-
-  Passes through non-string features unchanged. Optionally passes through copy
-  of original string features with "_plaintext" suffix added to the key.
-
-  Args:
-    dataset: a tf.data.Dataset
-    output_features: a dict of Feature objects; their vocabulary attribute will
-      be used to tokenize the specified features.
-    copy_plaintext: bool, whether to pass through copies of plaintext strings
-      with a "_plaintext" suffix added to the key.
-
-  Returns:
-    a tf.data.Dataset
-  """
-
-  def my_fn(features):
-    """Encode all specified feature that are strings and return a dictionary.
-
-    Args:
-      features: a dictionary
-
-    Returns:
-      a dictionary
-    """
-    ret = {}
-    for k, v in features.items():
-      if k in output_features and v.dtype == tf.string:
-        if copy_plaintext:
-          ret[f'{k}_plaintext'] = v
-        v = output_features[k].vocabulary.encode_tf(v)
-      ret[k] = v
-    return ret
-
-  return dataset.map(my_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-
-
 # TODO(adarob): Add a test.
 def span_corruption(dataset, sequence_length, output_features):
   """Final pretraining objective used in Raffel et al., 2019."""
+  input_length, targets_length = random_spans_helper(
+      extra_tokens_per_span_inputs=1,
+      extra_tokens_per_span_targets=1,
+      inputs_length=sequence_length['inputs'],
+      mean_noise_span_length=3.0,
+      noise_density=0.15)
+
+  if sequence_length['targets'] < targets_length:
+    raise ValueError(
+        f'Expected targets length for span corruption ({targets_length}) is '
+        f'greater than configured targets length '
+        f"({sequence_length['targets']})")
+
   ds = dataset
-  ds = select_random_chunk(ds, feature_key='targets', max_length=65536)
+  ds = select_random_chunk(ds, output_features=output_features,
+                           feature_key='targets', max_length=65536)
   ds = reduce_concat_tokens(ds, feature_key='targets', batch_size=128)
   ds = split_tokens(
       ds,
       feature_key='targets',
       min_tokens_per_segment=None,
-      max_tokens_per_segment=random_spans_helper(
-          extra_tokens_per_span_inputs=1,
-          extra_tokens_per_span_targets=1,
-          inputs_length=sequence_length['inputs'],
-          mean_noise_span_length=3.0,
-          noise_density=0.15
-      )[0]
-  )
+      max_tokens_per_segment=input_length)
   ds = denoise(
       ds,
       output_features,
@@ -1941,9 +1927,11 @@ def span_corruption(dataset, sequence_length, output_features):
 def iid_denoising(dataset, sequence_length, output_features):
   """Baseline pretraining objective used in Raffel et al., 2019."""
   ds = dataset
-  ds = select_random_chunk(ds, feature_key='targets', max_length=65536)
+  ds = select_random_chunk(ds, output_features=output_features,
+                           feature_key='targets', max_length=65536)
   ds = reduce_concat_tokens(ds, feature_key='targets', batch_size=128)
-  ds = split_tokens_to_inputs_length(ds, sequence_length=sequence_length)
+  ds = split_tokens_to_inputs_length(ds, output_features=output_features,
+                                     sequence_length=sequence_length)
   ds = denoise(
       ds,
       output_features,
@@ -1958,8 +1946,10 @@ def iid_denoising(dataset, sequence_length, output_features):
 def prefix_lm(dataset, sequence_length, output_features):
   """Prefix language modeling objective used in Raffel et al. 2019."""
   ds = dataset
-  ds = select_random_chunk(ds, feature_key='targets', max_length=65536)
-  ds = split_tokens_to_inputs_length(ds, sequence_length=sequence_length)
+  ds = select_random_chunk(ds, output_features=output_features,
+                           feature_key='targets', max_length=65536)
+  ds = split_tokens_to_inputs_length(ds, output_features=output_features,
+                                     sequence_length=sequence_length)
   ds = denoise(
       ds,
       output_features,
@@ -1973,6 +1963,7 @@ def prefix_lm(dataset, sequence_length, output_features):
 
 @gin.configurable
 def select_random_chunk(dataset: tf.data.Dataset,
+                        output_features: Mapping[str, seqio.Feature],
                         max_length: Optional[int] = None,
                         feature_key: str = 'targets',
                         additional_feature_keys: Optional[Sequence[str]] = None,
@@ -1990,6 +1981,7 @@ def select_random_chunk(dataset: tf.data.Dataset,
 
   Args:
     dataset: A tf.data.Dataset with dictionaries containing the key feature_key.
+    output_features: Mapping of keys to features.
     max_length: Typically specified in gin configs, takes priority over
       sequence_length.
     feature_key: Which feature to use from the dataset.
@@ -2009,10 +2001,13 @@ def select_random_chunk(dataset: tf.data.Dataset,
   """
   if max_length is None and sequence_length is not None:
     max_length = sequence_length[feature_key]
+    if output_features[feature_key].add_eos:
+      # Leave room to insert an EOS token.
+      max_length -= 1
   if max_length is None:
     raise ValueError('Must specify max_length or sequence_length.')
 
-  @utils.map_over_dataset(num_seeds=1)
+  @seqio.map_over_dataset(num_seeds=1)
   def _my_fn(x, seed):
     """Select a random chunk of tokens.
 
@@ -2049,7 +2044,13 @@ def select_random_chunk(dataset: tf.data.Dataset,
     if additional_feature_keys is not None:
       for k in additional_feature_keys:
         with tf.control_dependencies([
-            tf.assert_equal(tf.size(tokens), tf.size(x[k]))]):
+            tf.assert_equal(
+                tf.size(tokens),
+                tf.size(x[k]),
+                message=(f'Additional feature {k} is not the same size as '
+                         f'{feature_key} in select_random_chunk().')
+            )
+        ]):
           chunk[k] = x[k][start:end]
     if additional_passthrough_keys is not None:
       for k in additional_passthrough_keys:
@@ -2091,7 +2092,7 @@ def reduce_concat_tokens(dataset,
   return dataset.map(_my_fn, num_parallel_calls=AUTOTUNE)
 
 
-@utils.map_over_dataset
+@seqio.map_over_dataset
 def trim_tokens_at_front(x,
                          sequence_length,
                          keys_to_trim=None,
@@ -2194,7 +2195,7 @@ def trivia_qa_truncate_inputs(dataset, output_features, sequence_length):
 
   del output_features
 
-  @utils.map_over_dataset(num_seeds=1)
+  @seqio.map_over_dataset(num_seeds=1)
   def my_fn(features, seed):
     """Function to map original dataset to the new dataset."""
     inputs = features['inputs']
@@ -2347,7 +2348,7 @@ def split_tokens(dataset: tf.data.Dataset,
   Returns:
     a dataset
   """
-  @utils.map_over_dataset(num_seeds=1)
+  @seqio.map_over_dataset(num_seeds=1)
   def _split_tokens(x, seed):
     """Split one token sequence into multiple sequences."""
     tokens = x[feature_key]
@@ -2384,7 +2385,13 @@ def split_tokens(dataset: tf.data.Dataset,
     if additional_feature_keys is not None:
       for k in additional_feature_keys:
         with tf.control_dependencies([
-            tf.assert_equal(tf.size(tokens), tf.size(x[k]))]):
+            tf.assert_equal(
+                tf.size(tokens),
+                tf.size(x[k]),
+                message=(f'Additional feature {k} is not the same size as '
+                         f'{feature_key} in split_tokens().')
+            )
+        ]):
           padded = tf.pad(x[k], [[0, padding]])
           outputs[k] = tf.reshape(padded, [-1, length])
           orig_lengths[k] = tf.concat(
@@ -2413,25 +2420,88 @@ def split_tokens(dataset: tf.data.Dataset,
 
 
 @gin.configurable
-def split_tokens_to_inputs_length(dataset, sequence_length, **kwargs):
-  return split_tokens(dataset,
-                      max_tokens_per_segment=sequence_length['inputs'],
-                      **kwargs)
+def split_tokens_to_inputs_length(dataset, sequence_length,
+                                  output_features, **kwargs):
+  max_tokens = sequence_length['inputs']
+  if output_features['inputs'].add_eos:
+    # Leave room to insert an EOS token.
+    max_tokens -= 1
+
+  return split_tokens(dataset, max_tokens_per_segment=max_tokens, **kwargs)
 
 
 @gin.configurable
-def split_tokens_to_targets_length(dataset, sequence_length, **kwargs):
-  return split_tokens(dataset,
-                      max_tokens_per_segment=sequence_length['targets'],
-                      **kwargs)
+def split_tokens_to_targets_length(dataset, sequence_length,
+                                   output_features, **kwargs):
+  max_tokens = sequence_length['targets']
+  if output_features['targets'].add_eos:
+    # Leave room to insert an EOS token.
+    max_tokens -= 1
+
+  return split_tokens(dataset, max_tokens_per_segment=max_tokens, **kwargs)
 
 
 @gin.configurable
-def split_tokens_to_random_length(dataset, sequence_length, **kwargs):
+def split_tokens_to_random_length(dataset, sequence_length,
+                                  output_features, **kwargs):
+  max_tokens = sequence_length['inputs']
+  if output_features['inputs'].add_eos:
+    # Leave room to insert an EOS token.
+    max_tokens -= 1
+
   return split_tokens(dataset,
                       min_tokens_per_segment=8,
-                      max_tokens_per_segment=sequence_length['inputs'],
+                      max_tokens_per_segment=max_tokens,
                       **kwargs)
+
+
+@gin.configurable
+def concatenate_and_split_to_fixed_length(dataset,
+                                          sequence_length,
+                                          output_features,
+                                          feature_key='targets',
+                                          **unused_kwargs):
+  """Concatenate tokens across examples, then split to fixed-size chunks.
+
+  Chunk length is determined by sequence_length[feature_key].
+
+  Args:
+    dataset: a tf.data.Dataset
+    sequence_length: a dict of ints.
+    output_features: a dict mapping feature name to t5.data.Feature.
+    feature_key: a string
+  Returns:
+    a tf.data.Dataset
+  """
+  dataset = dataset.map(lambda x: {feature_key: x[feature_key]})
+  max_tokens = sequence_length[feature_key]
+  if output_features[feature_key].add_eos:
+    # Leave room to insert an EOS token.
+    max_tokens -= 1
+  return dataset.unbatch().batch(max_tokens)
+
+
+@gin.configurable
+def filter_by_string_length(dataset,
+                            feature_key='targets',
+                            min_length=1,
+                            max_length=1000000,
+                            **unused_kwargs):
+  """Filter examples by string length.
+
+  Args:
+    dataset: a tf.data.Dataset (not tokenized)
+    feature_key: a string
+    min_length: an integer
+    max_length: an integer
+  Returns:
+    a tf.data.Dataset
+  """
+  def my_fn(x):
+    l = tf.strings.length(x[feature_key])
+    return tf.logical_and(tf.greater_equal(l, min_length),
+                          tf.less_equal(l, max_length))
+  return dataset.filter(my_fn)
 
 
 @gin.configurable
@@ -2453,6 +2523,9 @@ def random_spans_helper(inputs_length=gin.REQUIRED,
 
   This function tells us the required number of tokens in the raw example (for
   split_tokens()) as well as the length of the encoded targets.
+
+  Note that this function assumes the inputs and targets will have EOS appended
+  and includes that in the reported length.
 
   Args:
     inputs_length: an integer - desired length of the tokenized inputs sequence
@@ -2562,7 +2635,7 @@ def denoise(dataset,
   Returns:
     A preprocessed tf.data.Dataset.
   """
-  @utils.map_over_dataset(num_seeds=6)
+  @seqio.map_over_dataset(num_seeds=6)
   def my_fn(features, seeds):
     """Map function."""
     tokens = features['targets']
@@ -2694,7 +2767,7 @@ def random_spans_noise_mask(length,
       up to num_items
     """
     first_in_segment = tf.pad(
-        utils.stateless_shuffle(
+        seqio.stateless_shuffle(
             to_int(tf.range(num_items - 1) < num_segments - 1),
             seed),
         [[1, 0]])
@@ -2906,7 +2979,7 @@ def permute_noise_tokens(tokens, noise_mask, vocabulary, seeds):
   del vocabulary
 
   masked_only = tf.boolean_mask(tokens, noise_mask)
-  permuted = utils.stateless_shuffle(masked_only, seeds[0])
+  permuted = seqio.stateless_shuffle(masked_only, seeds[0])
   # pad to avoid errors when it has size 0
   permuted = tf.pad(permuted, [[0, 1]])
   indices = tf.cumsum(tf.cast(noise_mask, tf.int32), exclusive=True)

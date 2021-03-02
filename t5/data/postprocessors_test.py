@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 """Tests for t5.data.postprocessors."""
 
 from absl.testing import absltest
-
+import numpy as np
 from t5.data import postprocessors
 
 
@@ -85,38 +85,39 @@ class PostprocessorsTest(absltest.TestCase):
 
     self.assertEqual(
         postprocessors.wsc_simple(
-            "potato", example={"targets_plaintext": b"turnip"},
+            "potato", example={"targets_pretokenized": b"turnip"},
             is_target=False), 0)
     self.assertEqual(
         postprocessors.wsc_simple(
-            "turnip", example={"targets_plaintext": b"turnip"},
+            "turnip", example={"targets_pretokenized": b"turnip"},
             is_target=False), 1)
     self.assertEqual(
         postprocessors.wsc_simple(
-            "the cat", example={"targets_plaintext": b"cat"}, is_target=False),
+            "the cat", example={"targets_pretokenized": b"cat"},
+            is_target=False),
         1)
     self.assertEqual(
         postprocessors.wsc_simple(
-            "Bob's hat", example={"targets_plaintext": b"Bob"},
+            "Bob's hat", example={"targets_pretokenized": b"Bob"},
             is_target=False), 0)
     self.assertEqual(
         postprocessors.wsc_simple(
             "Bob's hat",
-            example={"targets_plaintext": b"Bob's hat"},
+            example={"targets_pretokenized": b"Bob's hat"},
             is_target=False), 1)
     self.assertEqual(
         postprocessors.wsc_simple(
-            "potato", example={"targets_plaintext": b"Potato"},
+            "potato", example={"targets_pretokenized": b"Potato"},
             is_target=False), 1)
     self.assertEqual(
         postprocessors.wsc_simple(
             "a potato",
-            example={"targets_plaintext": b"my potato"},
+            example={"targets_pretokenized": b"my potato"},
             is_target=False), 1)
     self.assertEqual(
         postprocessors.wsc_simple(
             "fuzzy bunny",
-            example={"targets_plaintext": b"fuzzy hungry bunny"},
+            example={"targets_pretokenized": b"fuzzy hungry bunny"},
             is_target=False), 1)
 
   def test_rank_classification(self):
@@ -128,19 +129,17 @@ class PostprocessorsTest(absltest.TestCase):
         postprocessors.rank_classification(
             "blah", example={
                 "is_correct": False,
-                "idx": 10,
-            }, is_target=True), (10, False, 1))
+                "idx": np.array([10, 1]),
+            }, is_target=True), ((10, 1), False, 1))
 
     # The example has weight feature.
     self.assertEqual(
         postprocessors.rank_classification(
             "blah", example={
                 "is_correct": False,
-                "idx": 10,
+                "idx": np.array([10, 1]),
                 "weight": 0
-            }, is_target=True), (10, False, 0))
-
-
+            }, is_target=True), ((10, 1), False, 0))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Copyright 2020 The T5 Authors.
+# Copyright 2021 The T5 Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,7 +99,7 @@ def wsc_simple(prediction, example=None, is_target=False):
 
   # We aren't using the label but rather using the extracted referent so that we
   # can see if the prediction is equivalent to the referent.
-  referent = clean(example["targets_plaintext"])
+  referent = clean(example["targets_pretokenized"])
   prediction = clean(prediction)
 
   if ("'" in prediction) != ("'" in referent):
@@ -121,6 +121,8 @@ def wsc_simple(prediction, example=None, is_target=False):
 def rank_classification(score, example=None, is_target=False):
   """A postprocessor for the `rank_classification` preprocessor and metric."""
   if is_target:
-    return (example["idx"], example["is_correct"], example.get("weight", 1.0))
+    return (
+        tuple(example["idx"]), example["is_correct"], example.get("weight", 1.0)
+    )
   else:
     return score
